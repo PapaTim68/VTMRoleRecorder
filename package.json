@@ -1,0 +1,8 @@
+{
+  "name": "vtm-role-recorder",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

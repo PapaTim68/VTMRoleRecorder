@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#151317">
+    <title>VTM Role Recorder</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="VTM Role Recorder home">
+          <span class="brand-mark">V</span>
+          <span>VTM <span class="brand-light">ROLE RECORDER</span></span>
+        </a>
+        <a class="button button-quiet open-history-tab" href="?view=history" target="_blank" rel="noopener">History &amp; stats ↗</a>
+        <span class="local-badge"><span aria-hidden="true"></span> SAVED ON THIS DEVICE</span>
+      </header>
+
+      <main>
+        <section class="intro">
+          <div>
+            <p class="eyebrow">THE SIN PROVIDENCE</p>
+            <h1>Chronicle log</h1>
+            <p class="intro-copy">A quick, private record of the rolls at your table.</p>
+          </div>
+          <div class="data-actions">
+            <button class="button button-quiet" id="export-data" type="button">Export backup</button>
+            <label class="button button-quiet file-button" for="import-file">Import backup</label>
+            <input id="import-file" type="file" accept="application/json,.json" hidden>
+          </div>
+        </section>
+
+        <section class="session-bar panel" aria-label="Recording session">
+          <div class="session-title">
+            <label for="session-name">SESSION</label>
+            <input id="session-name" type="text" maxlength="60" aria-label="Session name">
+          </div>
+          <div class="session-controls">
+            <label class="sr-only" for="session-select">Choose a session</label>
+            <select id="session-select" aria-label="Choose a session"></select>
+            <button class="button button-accent" id="new-session" type="button">＋ New session</button>
+          </div>
+        </section>
+
+        <div id="status-message" class="status-message" role="status" aria-live="polite"></div>
+
+        <section class="history-view" id="history-view" aria-label="Roll history and statistics" hidden>
+          <div class="history-view-heading">
+            <div>
+              <p class="eyebrow">CHRONICLE REPORT</p>
+              <h1>History &amp; stats</h1>
+              <p class="intro-copy">Roll totals, outcomes, Hunger changes, and Rouse checks.</p>
+            </div>
+            <div class="history-view-controls">
+              <label class="field">Statistics scope
+                <select id="report-scope"></select>
+              </label>
+              <a class="button button-quiet" href="./">Back to recorder</a>
+            </div>
+          </div>
+          <div id="report-content"></div>
+        </section>
+
+        <section class="dashboard" aria-label="Recording dashboard">
+          <section class="panel participants-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">THE TABLE</p>
+                <h2>Characters</h2>
+              </div>
+              <button class="button button-quiet" id="add-player" type="button">＋ Add player</button>
+            </div>
+            <p class="section-note">Set up the sheet values once. They’re used as the base for each dice pool.</p>
+            <div id="participant-list" class="participant-list"></div>
+          </section>
+
+          <section class="panel roll-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">QUICK ENTRY</p>
+                <h2>Record a roll</h2>
+              </div>
+              <button class="button button-quiet undo-roll-focused" id="undo-roll-focused" type="button" disabled>Undo last</button>
+            </div>
+            <form id="roll-form">
+              <div class="form-grid">
+                <label class="field field-wide" id="participant-field">Player / character
+                  <select id="roll-participant" required></select>
+                </label>
+                <label class="field field-wide" id="pool-source-field">Pool source
+                  <select id="pool-mode">
+                    <option value="sheet">Calculate from character sheet</option>
+                    <option value="manual">Enter total dice manually</option>
+                  </select>
+                </label>
+                <label class="field" id="attribute-field"><span id="attribute-label">Attribute</span>
+                  <select id="roll-attribute"></select>
+                </label>
+                <label class="field" id="skill-field"><span id="skill-label">Skill</span>
+                  <select id="roll-skill"></select>
+                </label>
+                <div class="pool-summary field-wide">
+                  <div class="pool-main">
+                    <div id="base-pool-wrap">
+                      <span class="summary-label">BASE POOL</span>
+                      <strong id="base-pool">0</strong>
+                    </div>
+                    <span class="pool-plus" id="pool-plus" aria-hidden="true">+</span>
+                    <label class="field modifier-field"><span id="modifier-label">Modifier</span>
+                      <input id="roll-modifier" type="number" min="-20" max="20" value="0" inputmode="numeric">
+                    </label>
+                    <span class="pool-equals" id="pool-equals" aria-hidden="true">=</span>
+                    <div class="total-pool">
+                      <span class="summary-label">TOTAL DICE POOL</span>
+                      <strong id="total-pool">0</strong>
+                    </div>
+                  </div>
+                  <label class="field hunger-pool-field" id="hunger-field">
+                    <span>HUNGER DICE <small>included in pool</small></span>
+                    <input id="roll-hunger" type="number" min="0" max="99" value="0" inputmode="numeric">
+                  </label>
+                </div>
+                <label class="field"><span id="successes-label">Successes</span>
+                  <input id="roll-successes" type="number" min="0" max="99" value="0" inputmode="numeric" required>
+                </label>
+                <label class="field" id="difficulty-field">Difficulty
+                  <input id="roll-difficulty" type="number" min="0" max="99" value="2" inputmode="numeric" required>
+                </label>
+                <fieldset class="field field-wide outcome-field" id="outcome-field">
+                  <legend>Outcome</legend>
+                  <div class="outcome-selector" id="roll-outcome-selector" role="group" aria-label="Choose roll outcome">
+                    <button type="button" class="outcome-choice" data-outcome="Success" aria-pressed="false">Success</button>
+                    <button type="button" class="outcome-choice" data-outcome="Failure" aria-pressed="false">Failure</button>
+                    <button type="button" class="outcome-choice" data-outcome="Critical" aria-pressed="false">Critical</button>
+                    <button type="button" class="outcome-choice" data-outcome="Bestial failure" aria-pressed="false">Bestial failure</button>
+                    <button type="button" class="outcome-choice" data-outcome="Messy critical" aria-pressed="false">Messy critical</button>
+                    <button type="button" class="outcome-choice" data-outcome="Other" aria-pressed="false">Other</button>
+                  </div>
+                </fieldset>
+              </div>
+              <p class="form-hint" id="hunger-hint">Hunger dice default to the character’s current Hunger, up to the pool size. Adjust if needed.</p>
+              <button class="button button-accent record-button" type="submit">Record roll <span aria-hidden="true">↵</span></button>
+            </form>
+            <section id="rouse-actions" class="rouse-actions" aria-label="Rouse check">
+              <div>
+                <p class="eyebrow">ROUSE CHECK</p>
+                <p class="rouse-copy">Record the observed result. A failure adds 1 Hunger.</p>
+              </div>
+              <div class="rouse-buttons">
+                <button class="button rouse-success" id="rouse-success" type="button">✓ Success</button>
+                <button class="button rouse-failure" id="rouse-failure" type="button">＋ Hunger · Failure</button>
+              </div>
+            </section>
+            <section id="willpower-reroll" class="willpower-reroll" aria-label="Willpower reroll" hidden>
+              <div class="reroll-heading">
+                <div>
+                  <p class="eyebrow">WILLPOWER REROLL</p>
+                  <p class="reroll-copy" id="reroll-summary"></p>
+                </div>
+                <span class="reroll-willpower" id="reroll-willpower"></span>
+              </div>
+              <div class="reroll-controls">
+                <label class="field">Non-Hunger dice
+                  <input id="reroll-dice" type="number" min="1" max="3" value="3" inputmode="numeric">
+                </label>
+                <label class="field">Successes from reroll
+                  <input id="reroll-successes" type="number" min="0" max="99" value="0" inputmode="numeric">
+                </label>
+                <button class="button button-accent" id="apply-willpower-reroll" type="button">Spend 1 Willpower &amp; add successes</button>
+              </div>
+            </section>
+          </section>
+        </section>
+
+        <section class="panel history-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">SESSION RECORD</p>
+              <h2>Roll history <span class="count-pill" id="roll-count">0</span></h2>
+            </div>
+            <div class="history-heading-actions">
+              <a class="button button-quiet" href="?view=history" target="_blank" rel="noopener">Open history &amp; stats ↗</a>
+              <button class="button button-quiet" id="undo-roll" type="button" disabled>Undo last</button>
+            </div>
+          </div>
+          <div id="roll-history" class="history-wrap"></div>
+        </section>
+
+        <footer>
+          <span>VTM ROLE RECORDER</span>
+          <span>Local browser storage · Export a backup to move your records</span>
+        </footer>
+      </main>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

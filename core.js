@@ -98,6 +98,150 @@ export function applyRouseResult(participant, success) {
   };
 }
 
+export function formatSuccessDiceRatio(successes, dice) {
+  return dice ? (successes / dice).toFixed(2) : "—";
+}
+
+export function formatTextTable(headers, rows) {
+  const normalize = (value) => String(value ?? "").replace(/[\r\n]+/g, " ");
+  const values = [headers, ...rows].map((row) => row.map(normalize));
+  const widths = headers.map((header, index) =>
+    Math.max(...values.map((row) => row[index].length)));
+  const separator = `+${widths.map((width) => "-".repeat(width + 2)).join("+")}+`;
+  const formatRow = (row) =>
+    `| ${row.map((value, index) => value.padEnd(widths[index])).join(" | ")} |`;
+  return [separator, formatRow(values[0]), separator, ...values.slice(1).map(formatRow), separator].join("\n");
+}
+
+export function summarizeRolls(participants, rolls) {
+  const emptyOutcomes = () => ({
+    Success: 0,
+    Failure: 0,
+    Critical: 0,
+    "Messy critical": 0,
+    "Bestial failure": 0,
+    Other: 0,
+  });
+  const statsByParticipant = new Map(participants.map((participant) => [
+    participant.id,
+    {
+      id: participant.id,
+      role: participant.role,
+      label: participant.role === "storyteller" ? participant.name : participant.characterName || participant.name,
+      rolls: 0,
+      outcomeRolls: 0,
+      rouses: 0,
+      resolvedRouses: 0,
+      outcomes: emptyOutcomes(),
+      dice: 0,
+      sourceDice: 0,
+      normalDice: 0,
+      hungerDice: 0,
+      successes: 0,
+      successfulRolls: 0,
+      rouseSuccesses: 0,
+      damage: 0,
+      healthChange: 0,
+      sourceSuccesses: 0,
+    },
+  ]));
+  const outcomeCounts = emptyOutcomes();
+  for (const roll of rolls) {
+    let stats = statsByParticipant.get(roll.participantId);
+    if (!stats) {
+      stats = {
+        id: roll.participantId,
+        role: "unknown",
+        label: roll.characterName || roll.participantName,
+        rolls: 0,
+        outcomeRolls: 0,
+        rouses: 0,
+        resolvedRouses: 0,
+        outcomes: emptyOutcomes(),
+        dice: 0,
+        sourceDice: 0,
+        normalDice: 0,
+        hungerDice: 0,
+        successes: 0,
+        successfulRolls: 0,
+        rouseSuccesses: 0,
+        damage: 0,
+        healthChange: 0,
+        sourceSuccesses: 0,
+      };
+      statsByParticipant.set(roll.participantId, stats);
+    }
+    if (roll.type === "resource") {
+      if (roll.resource === "health") {
+        stats.healthChange += roll.to - roll.from;
+        stats.sourceSuccesses += roll.sourceSuccess ?? 0;
+      }
+      continue;
+    }
+    if (roll.type === "damage") {
+      stats.damage += roll.amount;
+      stats.sourceDice += roll.sourceDice ?? 0;
+      stats.sourceSuccesses += roll.amount;
+      continue;
+    }
+    if (roll.type === "reroll") continue;
+    stats.dice += roll.pool;
+    stats.sourceDice += roll.pool;
+    stats.normalDice += roll.pool - roll.hungerDice;
+    stats.hungerDice += roll.hungerDice;
+    stats.successes += roll.successes;
+    stats.sourceSuccesses += roll.sourceSuccess ?? roll.successes;
+    if (roll.type === "rouse") {
+      stats.rouses += 1;
+      if (roll.outcomeRecorded !== false) {
+        stats.resolvedRouses += 1;
+        if (roll.outcome === "Rouse success" || roll.successes > 0) stats.rouseSuccesses += 1;
+      }
+      continue;
+    }
+    stats.rolls += 1;
+    if (roll.outcomeRecorded === false) continue;
+    stats.outcomeRolls += 1;
+    const outcome = Object.hasOwn(outcomeCounts, roll.outcome) ? roll.outcome : "Other";
+    stats.outcomes[outcome] += 1;
+    outcomeCounts[outcome] += 1;
+    if (["Success", "Critical", "Messy critical"].includes(outcome)) stats.successfulRolls += 1;
+  }
+  const items = [...statsByParticipant.values()];
+  const totals = items.reduce((total, item) => ({
+    rolls: total.rolls + item.rolls,
+    outcomeRolls: total.outcomeRolls + item.outcomeRolls,
+    dice: total.dice + item.dice,
+    sourceDice: total.sourceDice + item.sourceDice,
+    normalDice: total.normalDice + item.normalDice,
+    hungerDice: total.hungerDice + item.hungerDice,
+    successes: total.successes + item.successes,
+    successfulRolls: total.successfulRolls + item.successfulRolls,
+    rouses: total.rouses + item.rouses,
+    resolvedRouses: total.resolvedRouses + item.resolvedRouses,
+    rouseSuccesses: total.rouseSuccesses + item.rouseSuccesses,
+    damage: total.damage + item.damage,
+    healthChange: total.healthChange + item.healthChange,
+    sourceSuccesses: total.sourceSuccesses + item.sourceSuccesses,
+  }), {
+    rolls: 0,
+    outcomeRolls: 0,
+    dice: 0,
+    sourceDice: 0,
+    normalDice: 0,
+    hungerDice: 0,
+    successes: 0,
+    successfulRolls: 0,
+    rouses: 0,
+    resolvedRouses: 0,
+    rouseSuccesses: 0,
+    damage: 0,
+    healthChange: 0,
+    sourceSuccesses: 0,
+  });
+  return { participants: items, outcomes: outcomeCounts, totals };
+}
+
 export function validateState(value) {
   if (!value || value.version !== APP_VERSION || !Array.isArray(value.participants) ||
       !Array.isArray(value.sessions) || value.sessions.length === 0) {
@@ -159,8 +303,18 @@ export function validateState(value) {
       if (roll.type === "resource") {
         if (!RESOURCE_LIMITS[roll.resource] || !Number.isInteger(roll.from) ||
             !Number.isInteger(roll.to) || roll.from < 0 || roll.from > RESOURCE_LIMITS[roll.resource] ||
-            roll.to < 0 || roll.to > RESOURCE_LIMITS[roll.resource]) {
+            roll.to < 0 || roll.to > RESOURCE_LIMITS[roll.resource] ||
+            (roll.sourceSuccess !== undefined &&
+             (!Number.isInteger(roll.sourceSuccess) || roll.sourceSuccess < -99 || roll.sourceSuccess > 99))) {
           throw new TypeError("A resource change in this backup contains invalid data.");
+        }
+        continue;
+      }
+      if (roll.type === "damage") {
+        if (!Number.isInteger(roll.amount) || roll.amount < 0 || roll.amount > 99 ||
+            (roll.sourceDice !== undefined &&
+             (!Number.isInteger(roll.sourceDice) || roll.sourceDice < 0 || roll.sourceDice > 99))) {
+          throw new TypeError("A damage entry in this backup contains invalid data.");
         }
         continue;
       }
@@ -170,7 +324,10 @@ export function validateState(value) {
           !Number.isInteger(roll.successes) || roll.successes < 0 ||
           !Number.isInteger(roll.difficulty) || roll.difficulty < 0 ||
           !OUTCOMES.has(roll.outcome) ||
-          (roll.type !== undefined && !["roll", "rouse", "reroll"].includes(roll.type))) {
+          (roll.type !== undefined && !["roll", "rouse", "reroll"].includes(roll.type)) ||
+          (roll.outcomeRecorded !== undefined && typeof roll.outcomeRecorded !== "boolean") ||
+          (roll.sourceSuccess !== undefined &&
+           (!Number.isInteger(roll.sourceSuccess) || roll.sourceSuccess < -99 || roll.sourceSuccess > 99))) {
         throw new TypeError("A roll in this backup contains invalid data.");
       }
       if (roll.resourceChange &&

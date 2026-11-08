@@ -10,10 +10,13 @@ import {
   calculateOutcome,
   clamp,
   createInitialState,
+  formatSuccessDiceRatio,
+  formatTextTable,
   hungerDiceCount,
   makeId,
   makeParticipant,
   makeSession,
+  summarizeRolls,
   validateState,
 } from "./core.js";
 
@@ -248,22 +251,28 @@ function historyTableMarkup(rolls, includeSession = false) {
     <table>
       <thead><tr>${includeSession ? "<th>SESSION</th>" : ""}<th>TIME</th><th>PLAYER / CHARACTER</th><th>CHECK</th><th>DICE</th><th>HUNGER</th><th>RESULTS</th><th>DIFF.</th><th>OUTCOME</th><th>CHANGE</th></tr></thead>
       <tbody>${[...rolls].reverse().map((roll) => `
-        <tr class="${roll.type === "resource" ? "resource-history-row" : roll.type === "reroll" ? "reroll-history-row" : ""}">
+        <tr class="${roll.type === "resource" ? "resource-history-row" : roll.type === "damage" ? "damage-history-row" : roll.type === "reroll" ? "reroll-history-row" : ""}">
           ${includeSession ? `<td>${escapeHtml(roll.reportSessionName || "")}</td>` : ""}
           <td class="time-cell">${escapeHtml(roll.time)}</td>
           <td><strong>${escapeHtml(roll.participantName)}</strong>${roll.characterName ? `<span class="table-sub">${escapeHtml(roll.characterName)}</span>` : ""}</td>
-          <td>${roll.type === "resource" ? "Tracker change" : roll.type === "reroll" ? `Willpower reroll · ${roll.rerolledDice} dice` : escapeHtml(roll.check)}</td>
-          <td class="number-cell">${roll.type === "resource" ? "—" : roll.type === "reroll" ? roll.rerolledDice : roll.pool}</td>
-          <td class="number-cell">${roll.type === "resource" || state.participants.find((item) => item.id === roll.participantId)?.role === "storyteller" ? "—" : roll.hungerDice}</td>
-          <td class="number-cell">${roll.type === "resource" ? "—" : roll.successes}</td>
-          <td class="number-cell">${roll.type === "resource" ? "—" : roll.difficulty}</td>
+          <td>${roll.type === "resource" ? "Tracker change" : roll.type === "damage" ? "Damage dealt" : roll.type === "reroll" ? `Willpower reroll · ${roll.rerolledDice} dice` : escapeHtml(roll.check)}</td>
+          <td class="number-cell">${roll.type === "resource" || roll.type === "damage" ? "—" : roll.type === "reroll" ? roll.rerolledDice : roll.pool}</td>
+          <td class="number-cell">${roll.type === "resource" || roll.type === "damage" || state.participants.find((item) => item.id === roll.participantId)?.role === "storyteller" ? "—" : roll.hungerDice}</td>
+          <td class="number-cell">${roll.type === "resource" ? "—" : roll.type === "damage" ? roll.amount : roll.successes}</td>
+          <td class="number-cell">${roll.type === "resource" || roll.type === "damage" ? "—" : roll.difficulty}</td>
           <td>${roll.type === "resource"
             ? '<span class="resource-history-tag">TRACKER</span>'
+            : roll.type === "damage"
+              ? '<span class="resource-history-tag">DAMAGE</span>'
             : roll.type === "reroll"
               ? '<span class="resource-history-tag">REROLL</span>'
-              : `<span class="outcome outcome-${slug(roll.outcome)}">${escapeHtml(roll.outcome)}</span>`}</td>
+              : roll.outcomeRecorded === false
+                ? '<span class="resource-history-tag">NO RESULT</span>'
+                : `<span class="outcome outcome-${slug(roll.outcome)}">${escapeHtml(roll.outcome)}</span>`}</td>
           <td class="change-cell">${roll.type === "resource"
             ? `${escapeHtml(roll.resource[0].toUpperCase() + roll.resource.slice(1))} ${roll.from} → ${roll.to}`
+            : roll.type === "damage"
+              ? "—"
             : roll.type === "reroll"
               ? `Willpower ${roll.resourceChange.from} → ${roll.resourceChange.to} · Total ${roll.successChange.to}`
             : roll.resourceChange
@@ -275,7 +284,7 @@ function historyTableMarkup(rolls, includeSession = false) {
 
 function renderHistory() {
   const rolls = activeSession().rolls;
-  $("#roll-count").textContent = String(rolls.filter((roll) => roll.type !== "resource" && roll.type !== "reroll").length);
+  $("#roll-count").textContent = String(rolls.filter((roll) => !["resource", "damage", "reroll"].includes(roll.type)).length);
   $("#undo-roll").disabled = rolls.length === 0;
   $("#undo-roll-focused").disabled = rolls.length === 0;
   rollHistory.innerHTML = historyTableMarkup(rolls);
@@ -283,7 +292,7 @@ function renderHistory() {
 
 function hungerTimelineMarkup(reportRolls) {
   const players = state.participants.filter((participant) => participant.role === "player");
-  const totalRolls = reportRolls.filter((roll) => roll.type !== "resource").length;
+  const totalRolls = reportRolls.filter((roll) => roll.type !== "resource" && roll.type !== "damage").length;
   const width = 760;
   const height = 300;
   const left = 56;
@@ -296,7 +305,6 @@ function hungerTimelineMarkup(reportRolls) {
   const y = (hunger) => bottom - (clamp(hunger, 0, 5) / 5) * (bottom - top);
   const colors = ["#ef8399", "#90b7de", "#82c5a5", "#d5ab73", "#b6a4de"];
   const series = players.map((player, index) => {
-    const currentHunger = player.resources.hunger.current;
     const playerEvents = reportRolls.flatMap((roll) => {
       if (roll.participantId !== player.id) return [];
       if (roll.type === "resource" && roll.resource === "hunger") {
@@ -307,13 +315,14 @@ function hungerTimelineMarkup(reportRolls) {
       }
       return [];
     });
+    const currentHunger = playerEvents.at(-1)?.to ?? player.resources.hunger.current;
     const initialHunger = playerEvents[0]?.from ?? currentHunger;
     const coordinates = [[x(0), y(initialHunger)]];
     let hunger = initialHunger;
     let rollCount = 0;
     let eventIndex = 0;
     for (const roll of reportRolls) {
-      if (roll.type !== "resource") rollCount += 1;
+      if (roll.type !== "resource" && roll.type !== "damage") rollCount += 1;
       const event = playerEvents[eventIndex]?.roll === roll ? playerEvents[eventIndex++] : null;
       if (event) {
         event.rollCount = rollCount;
@@ -321,7 +330,7 @@ function hungerTimelineMarkup(reportRolls) {
         hunger = event.to;
         coordinates.push([x(rollCount), y(hunger)]);
       }
-      if (roll.type !== "resource") coordinates.push([x(rollCount), y(hunger)]);
+      if (roll.type !== "resource" && roll.type !== "damage") coordinates.push([x(rollCount), y(hunger)]);
     }
     if (hunger !== currentHunger) coordinates.push([x(totalRolls), y(currentHunger)]);
     const points = coordinates.map(([cx, cy], pointIndex) =>
@@ -352,7 +361,7 @@ function hungerTimelineMarkup(reportRolls) {
         <span><i style="--series-color:${item.color}"></i>${escapeHtml(item.player.characterName || item.player.name)}
           · Current Hunger ${item.currentHunger}</span>`).join("")}
     </div>
-    <p class="chart-caption">The horizontal axis counts recorded rolls, including Rouse checks and Willpower rerolls; tracker-only changes do not count. Each line ends at the player's current Hunger.</p>`;
+    <p class="chart-caption">The horizontal axis counts recorded rolls, including Rouse checks and Willpower rerolls; tracker-only changes do not count. Each line ends at the latest Hunger value in this report scope.</p>`;
 }
 
 function renderReport() {
@@ -372,74 +381,13 @@ function renderReport() {
   const reportRolls = sessions.flatMap((session) =>
     session.rolls.map((roll) => ({ ...roll, reportSessionName: session.name })))
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const statsByParticipant = new Map(state.participants.map((participant) => [
-    participant.id,
-    {
-      id: participant.id,
-      role: participant.role,
-      label: participant.role === "storyteller" ? participant.name : participant.characterName || participant.name,
-      rolls: [],
-      rouses: [],
-      outcomes: { Success: 0, Failure: 0, Critical: 0, "Messy critical": 0, "Bestial failure": 0, Other: 0 },
-      dice: 0,
-      normalDice: 0,
-      hungerDice: 0,
-      successes: 0,
-      successfulRolls: 0,
-      rouseSuccesses: 0,
-    },
-  ]));
-  const outcomeCounts = { Success: 0, Failure: 0, Critical: 0, "Messy critical": 0, "Bestial failure": 0, Other: 0 };
-  for (const roll of reportRolls) {
-    if (roll.type === "resource") continue;
-    if (!statsByParticipant.has(roll.participantId)) {
-      statsByParticipant.set(roll.participantId, {
-        id: roll.participantId,
-        role: "unknown",
-        label: roll.characterName || roll.participantName,
-        rolls: [],
-        rouses: [],
-        outcomes: { Success: 0, Failure: 0, Critical: 0, "Messy critical": 0, "Bestial failure": 0, Other: 0 },
-        dice: 0,
-        normalDice: 0,
-        hungerDice: 0,
-        successes: 0,
-        successfulRolls: 0,
-        rouseSuccesses: 0,
-      });
-    }
-    const stats = statsByParticipant.get(roll.participantId);
-    if (roll.type === "rouse") {
-      stats.rouses.push(roll);
-      if (roll.outcome === "Rouse success" || roll.successes > 0) stats.rouseSuccesses += 1;
-      continue;
-    }
-    if (roll.type === "reroll") continue;
-    stats.rolls.push(roll);
-    stats.dice += roll.pool;
-    stats.hungerDice += roll.hungerDice;
-    stats.normalDice += roll.pool - roll.hungerDice;
-    stats.successes += roll.successes;
-    const outcome = Object.hasOwn(outcomeCounts, roll.outcome) ? roll.outcome : "Other";
-    stats.outcomes[outcome] += 1;
-    outcomeCounts[outcome] += 1;
-    if (["Success", "Critical", "Messy critical"].includes(outcome)) stats.successfulRolls += 1;
-  }
-
-  const participants = [...statsByParticipant.values()];
-  const rollStats = participants.reduce((total, item) => ({
-    rolls: total.rolls + item.rolls.length,
-    dice: total.dice + item.dice,
-    normalDice: total.normalDice + item.normalDice,
-    hungerDice: total.hungerDice + item.hungerDice,
-    successes: total.successes + item.successes,
-    successfulRolls: total.successfulRolls + item.successfulRolls,
-    rouses: total.rouses + item.rouses.length,
-    rouseSuccesses: total.rouseSuccesses + item.rouseSuccesses,
-  }), { rolls: 0, dice: 0, normalDice: 0, hungerDice: 0, successes: 0, successfulRolls: 0, rouses: 0, rouseSuccesses: 0 });
-  const successRate = rollStats.rolls ? Math.round((rollStats.successfulRolls / rollStats.rolls) * 100) : 0;
-  const rouseRate = rollStats.rouses ? Math.round((rollStats.rouseSuccesses / rollStats.rouses) * 100) : 0;
-  const ratio = (dice, successes) => successes ? (dice / successes).toFixed(2) : "—";
+  const reportStats = summarizeRolls(state.participants, reportRolls);
+  const participants = reportStats.participants;
+  const rollStats = reportStats.totals;
+  const outcomeCounts = reportStats.outcomes;
+  const successRate = rollStats.outcomeRolls ? Math.round((rollStats.successfulRolls / rollStats.outcomeRolls) * 100) : 0;
+  const rouseRate = rollStats.resolvedRouses ? Math.round((rollStats.rouseSuccesses / rollStats.resolvedRouses) * 100) : 0;
+  const ratio = (dice, successes) => formatSuccessDiceRatio(successes, dice);
   const outcomeOrder = ["Success", "Failure", "Critical", "Messy critical", "Bestial failure", "Other"];
   const maxOutcome = Math.max(1, ...Object.values(outcomeCounts));
   const maxDice = Math.max(1, ...participants.map((item) => item.dice));
@@ -453,6 +401,28 @@ function renderReport() {
       </div>
       <span class="report-bar-value">${item.dice}</span>
     </div>`).join("");
+  const activeParticipants = participants.filter((item) => item.sourceDice || item.sourceSuccesses || item.rouses);
+  const diceTotalRows = activeParticipants.map((item) => `
+    <tr>
+      <td><strong>${escapeHtml(reportParticipantsLabel(item))}</strong></td>
+      <td class="number-cell">${item.sourceDice}</td>
+      <td class="number-cell">${item.normalDice}</td>
+      <td class="number-cell">${item.hungerDice}</td>
+      <td class="number-cell">${item.sourceSuccesses}</td>
+      <td class="number-cell">${item.sourceDice ? Math.round((item.sourceSuccesses / item.sourceDice) * 100) : 0}%</td>
+    </tr>`).join("");
+  const rouseRows = participants.filter((item) => item.rouses).map((item) => `
+    <tr>
+      <td><strong>${escapeHtml(reportParticipantsLabel(item))}</strong></td>
+      <td class="number-cell">${item.resolvedRouses}</td>
+      <td class="number-cell">${item.rouseSuccesses}</td>
+      <td class="number-cell">${item.resolvedRouses
+        ? `${((item.rouseSuccesses / item.resolvedRouses) * 100).toFixed(2).replace(".", ",")}%`
+        : "—"}</td>
+    </tr>`).join("");
+  const rouseRateText = rollStats.resolvedRouses
+    ? `${((rollStats.rouseSuccesses / rollStats.resolvedRouses) * 100).toFixed(2).replace(".", ",")}%`
+    : "—";
   const outcomeRows = outcomeOrder.map((outcome) => `
     <div class="report-bar-row">
       <span class="report-bar-label">${escapeHtml(outcome)}</span>
@@ -463,20 +433,24 @@ function renderReport() {
     </div>`).join("");
   $("#report-content").innerHTML = `
     <p class="report-scope-label">${escapeHtml(selectedSessionName)}</p>
+    <p class="report-source-note">Roll-only statistics exclude Damage and Health entries. Source totals reproduce the workbook's DICE/SUCCESS calculation, including special values stored in its dice and success cells. All sessions sums the episode sheets and may differ from the workbook's aggregate All sheet.</p>
     <div class="report-metrics">
       <div><span>DICE ROLLS</span><strong>${rollStats.rolls}</strong></div>
       <div><span>TOTAL DICE</span><strong>${rollStats.dice}</strong></div>
+      <div><span>SOURCE DICE</span><strong>${rollStats.sourceDice}</strong></div>
       <div><span>NORMAL DICE</span><strong>${rollStats.normalDice}</strong></div>
       <div><span>HUNGER DICE</span><strong>${rollStats.hungerDice}</strong></div>
-      <div><span>SUCCESS RESULTS</span><strong>${rollStats.successes}</strong></div>
+      <div><span>ROLL SUCCESSES</span><strong>${rollStats.successes}</strong></div>
+      <div><span>SOURCE SUCCESS TOTAL</span><strong>${rollStats.sourceSuccesses}</strong></div>
       <div><span>ROLL SUCCESS RATE</span><strong>${successRate}%</strong></div>
-      <div><span>DICE / SUCCESS</span><strong>${ratio(rollStats.dice, rollStats.successes)}</strong></div>
-      <div><span>ROUSE SUCCESS RATE</span><strong>${rollStats.rouseSuccesses} / ${rollStats.rouses} · ${rouseRate}%</strong></div>
+      <div><span>ROLL SUCCESS / DICE</span><strong>${ratio(rollStats.dice, rollStats.successes)}</strong></div>
+      <div><span>SOURCE SUCCESS / DICE</span><strong>${ratio(rollStats.sourceDice, rollStats.sourceSuccesses)}</strong></div>
+      <div><span>ROUSE SUCCESS RATE</span><strong>${rollStats.rouseSuccesses} / ${rollStats.resolvedRouses} recorded · ${rouseRate}%</strong></div>
     </div>
     <div class="report-chart-grid">
       <section class="panel report-panel">
         <h2>Dice by character</h2>
-        <p>Normal and Hunger dice recorded in regular rolls.</p>
+        <p>Normal and Hunger dice recorded in rolls, including Rouse checks.</p>
         <div class="report-legend"><span><i class="legend-normal"></i>Normal dice</span><span><i class="legend-hunger"></i>Hunger dice</span></div>
         ${normalDiceRows || '<p class="report-empty">No roll data in this scope.</p>'}
       </section>
@@ -487,25 +461,69 @@ function renderReport() {
       </section>
     </div>
     <section class="panel report-panel report-wide">
-      <h2>Hunger over time</h2>
+      <div class="report-table-heading">
+        <h2>Hunger over time</h2>
+        <button class="button button-quiet" type="button" data-report-copy="chart">Copy graph image</button>
+      </div>
       <p>Recorded Hunger tracker changes for every player in this report scope.</p>
       ${hungerTimelineMarkup(reportRolls)}
+      <div class="report-table-heading report-subheading">
+        <h3>Rouse checks</h3>
+        <button class="button button-quiet" type="button" data-report-copy="rouse">Copy Rouse table</button>
+      </div>
+      <div class="history-wrap"><table class="report-table report-copy-table">
+        <thead><tr><th>CHARACTER</th><th>TOTAL</th><th>SUCCESS</th><th>RATIO</th></tr></thead>
+        <tbody>${rouseRows}
+          <tr class="report-total-row">
+            <td><strong>All</strong></td>
+            <td class="number-cell">${rollStats.resolvedRouses}</td>
+            <td class="number-cell">${rollStats.rouseSuccesses}</td>
+            <td class="number-cell">${rouseRateText}</td>
+          </tr>
+        </tbody>
+      </table></div>
     </section>
     <section class="panel report-panel report-wide">
-      <h2>Character totals</h2>
+      <div class="report-table-heading">
+        <h2>Episode dice totals</h2>
+        <button class="button button-quiet" type="button" data-report-copy="dice">Copy dice table</button>
+      </div>
+      <div class="history-wrap"><table class="report-table report-copy-table">
+        <thead><tr><th>CHARACTER</th><th>TOTAL</th><th>NORMAL</th><th>HUNGER</th><th>SUCCESS</th><th>DICE/SUCCESS</th></tr></thead>
+        <tbody>${diceTotalRows}
+          <tr class="report-total-row">
+            <td><strong>All</strong></td>
+            <td class="number-cell">${rollStats.sourceDice}</td>
+            <td class="number-cell">${rollStats.normalDice}</td>
+            <td class="number-cell">${rollStats.hungerDice}</td>
+            <td class="number-cell">${rollStats.sourceSuccesses}</td>
+            <td class="number-cell">${rollStats.sourceDice
+              ? `${Math.round((rollStats.sourceSuccesses / rollStats.sourceDice) * 100)}%`
+              : "—"}</td>
+          </tr>
+        </tbody>
+      </table></div>
+    </section>
+    <section class="panel report-panel report-wide">
+      <h2>Roll and event detail</h2>
       <div class="history-wrap"><table class="report-table">
-        <thead><tr><th>CHARACTER</th><th>ROLLS</th><th>NORMAL DICE</th><th>HUNGER DICE</th><th>SUCCESS RESULTS</th><th>DICE / SUCCESS</th><th>ROLL SUCCESS RATE</th><th>ROUSE</th><th>ROUSE SUCCESS RATE</th></tr></thead>
+        <thead><tr><th>CHARACTER</th><th>ROLLS</th><th>NORMAL DICE</th><th>HUNGER DICE</th><th>ROLL SUCCESSES</th><th>ROLL SUCCESS / DICE</th><th>SOURCE DICE</th><th>SOURCE SUCCESSES</th><th>SOURCE SUCCESS / DICE</th><th>ROLL SUCCESS RATE</th><th>DAMAGE DEALT</th><th>HEALTH CHANGE</th><th>ROUSE</th><th>ROUSE SUCCESS RATE</th></tr></thead>
         <tbody>${participants.map((item) => `
           <tr>
             <td><strong>${escapeHtml(item.label)}</strong>${item.role === "storyteller" ? '<span class="table-sub">Storyteller</span>' : ""}</td>
-            <td class="number-cell">${item.rolls.length}</td>
+            <td class="number-cell">${item.rolls}</td>
             <td class="number-cell">${item.normalDice}</td>
             <td class="number-cell">${item.hungerDice}</td>
             <td class="number-cell">${item.successes}</td>
             <td class="number-cell">${ratio(item.dice, item.successes)}</td>
-            <td class="number-cell">${item.rolls.length ? Math.round((item.successfulRolls / item.rolls.length) * 100) : 0}%</td>
-            <td class="number-cell">${item.rouseSuccesses} / ${item.rouses.length}</td>
-            <td class="number-cell">${item.rouses.length ? Math.round((item.rouseSuccesses / item.rouses.length) * 100) : 0}%</td>
+            <td class="number-cell">${item.sourceDice}</td>
+            <td class="number-cell">${item.sourceSuccesses}</td>
+            <td class="number-cell">${ratio(item.sourceDice, item.sourceSuccesses)}</td>
+            <td class="number-cell">${item.outcomeRolls ? Math.round((item.successfulRolls / item.outcomeRolls) * 100) : 0}%</td>
+            <td class="number-cell">${item.damage}</td>
+            <td class="number-cell">${item.healthChange > 0 ? "+" : ""}${item.healthChange}</td>
+            <td class="number-cell">${item.rouseSuccesses} / ${item.resolvedRouses} recorded</td>
+            <td class="number-cell">${item.resolvedRouses ? Math.round((item.rouseSuccesses / item.resolvedRouses) * 100) : 0}%</td>
           </tr>`).join("")}</tbody>
       </table></div>
     </section>
@@ -513,6 +531,138 @@ function renderReport() {
       <h2>Roll history</h2>
       <div class="history-wrap">${historyTableMarkup(reportRolls, reportScope === "all")}</div>
     </section>`;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function reportParticipantsLabel(item) {
+  const person = state.participants.find((entry) => entry.id === item.id);
+  if (!person) return item.label;
+  return person.role === "storyteller"
+    ? `Storyteller/${person.name}`
+    : `${person.name}/${person.characterName || person.name}`;
+}
+
+function reportStatsForScope() {
+  const sessions = reportScope === "all"
+    ? state.sessions
+    : state.sessions.filter((session) => session.id === reportScope);
+  return summarizeRolls(state.participants, sessions.flatMap((session) => session.rolls));
+}
+
+function reportDiceTableText() {
+  const aggregate = reportStatsForScope();
+  const characterRows = aggregate.participants
+    .filter((item) => item.sourceDice || item.sourceSuccesses || item.rouses)
+    .map((item) => [
+    reportParticipantsLabel(item),
+    item.sourceDice,
+    item.normalDice,
+    item.hungerDice,
+    item.sourceSuccesses,
+    item.sourceDice
+      ? `${Math.round((item.sourceSuccesses / item.sourceDice) * 100)}%`
+      : "—",
+  ]);
+  characterRows.push([
+    "All",
+    aggregate.totals.sourceDice,
+    aggregate.totals.normalDice,
+    aggregate.totals.hungerDice,
+    aggregate.totals.sourceSuccesses,
+    aggregate.totals.sourceDice
+      ? `${Math.round((aggregate.totals.sourceSuccesses / aggregate.totals.sourceDice) * 100)}%`
+      : "—",
+  ]);
+  return formatTextTable(
+    ["", "TOTAL", "NORMAL", "HUNGER", "SUCCESS", "DICE/SUCCESS"],
+    characterRows,
+  );
+}
+
+function reportRouseTableText() {
+  const aggregate = reportStatsForScope();
+  const rows = aggregate.participants.filter((item) => item.rouses).map((item) => [
+    reportParticipantsLabel(item),
+    item.resolvedRouses,
+    item.rouseSuccesses,
+    item.resolvedRouses
+      ? `${((item.rouseSuccesses / item.resolvedRouses) * 100).toFixed(2).replace(".", ",")}%`
+      : "—",
+  ]);
+  rows.push([
+    "All",
+    aggregate.totals.resolvedRouses,
+    aggregate.totals.rouseSuccesses,
+    aggregate.totals.resolvedRouses
+      ? `${((aggregate.totals.rouseSuccesses / aggregate.totals.resolvedRouses) * 100).toFixed(2).replace(".", ",")}%`
+      : "—",
+  ]);
+  return formatTextTable(["", "TOTAL", "SUCCESS", "RATIO"], rows);
+}
+
+async function copyHungerChart() {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+    throw new Error("This browser does not support copying images to the clipboard.");
+  }
+  const source = $(".hunger-timeline");
+  if (!source) throw new Error("The Hunger graph is not available in this report.");
+  const svg = source.cloneNode(true);
+  const [width, height] = svg.getAttribute("viewBox").split(/\s+/).slice(2).map(Number);
+  svg.setAttribute("width", String(width));
+  svg.setAttribute("height", String(height + 32));
+  const background = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  background.setAttribute("width", "100%");
+  background.setAttribute("height", "100%");
+  background.setAttribute("fill", "#17141a");
+  svg.insertBefore(background, svg.firstChild);
+  const legend = [...$(".hunger-chart-legend").children];
+  const labelY = height + 19;
+  legend.forEach((entry, index) => {
+    const marker = entry.querySelector("i");
+    const label = entry.textContent.split("·")[0].trim();
+    const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    text.setAttribute("x", String(40 + (index * (width - 80)) / Math.max(1, legend.length - 1)));
+    text.setAttribute("y", String(labelY));
+    text.setAttribute("text-anchor", legend.length === 1 ? "middle" : index === 0 ? "start" : index === legend.length - 1 ? "end" : "middle");
+    text.setAttribute("fill", marker ? getComputedStyle(marker).backgroundColor : "#d7d0da");
+    text.setAttribute("font-family", "Consolas, monospace");
+    text.setAttribute("font-size", "10");
+    text.textContent = label;
+    svg.append(text);
+  });
+  const styles = document.createElementNS("http://www.w3.org/2000/svg", "style");
+  styles.textContent = ".chart-grid-line{stroke:#39333d;stroke-width:1}.chart-tick-line{stroke:#5a525f;stroke-width:1}.chart-axis-label{fill:#a49ca9;font:10px Consolas,monospace}.hunger-series-line{fill:none;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}.hunger-series-point{stroke:#17141a;stroke-width:1.5}";
+  svg.insertBefore(styles, svg.firstChild);
+  const svgBlob = new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml;charset=utf-8" });
+  const imageUrl = URL.createObjectURL(svgBlob);
+  try {
+    const image = new Image();
+    image.src = imageUrl;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = width * 2;
+    canvas.height = (height + 32) * 2;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("The browser could not create an image canvas.");
+    context.scale(2, 2);
+    context.drawImage(image, 0, 0, width, height + 32);
+    const png = await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("The browser could not encode the Hunger graph.")), "image/png");
+    });
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+  } finally {
+    URL.revokeObjectURL(imageUrl);
+  }
 }
 
 function slug(value) {
@@ -839,6 +989,29 @@ $("#report-scope").addEventListener("change", (event) => {
   window.history.replaceState(null, "", query);
   renderReport();
 });
+$("#report-content").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-report-copy]");
+  if (!button) return;
+  try {
+    if (button.dataset.reportCopy === "chart") {
+      await copyHungerChart();
+      statusMessage.textContent = "Hunger graph copied to the clipboard.";
+      return;
+    }
+    if (!navigator.clipboard?.writeText) {
+      throw new Error("Clipboard access is unavailable in this browser.");
+    }
+    const text = button.dataset.reportCopy === "dice"
+      ? reportDiceTableText()
+      : reportRouseTableText();
+    await navigator.clipboard.writeText(text);
+    statusMessage.textContent = button.dataset.reportCopy === "dice"
+      ? "Episode dice table copied to the clipboard."
+      : "Rouse table copied to the clipboard.";
+  } catch (error) {
+    statusMessage.textContent = `Copy failed: ${error.message}`;
+  }
+});
 $("#apply-willpower-reroll").addEventListener("click", () => {
   const participant = state.participants.find((item) => item.id === $("#roll-participant").value);
   if (!participant || participant.role !== "player") return;
@@ -1004,13 +1177,7 @@ $("#undo-roll").addEventListener("click", undoLastRoll);
 $("#undo-roll-focused").addEventListener("click", undoLastRoll);
 
 $("#export-data").addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "vtm-role-recorder-backup.json";
-  link.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(new Blob([JSON.stringify(state, null, 2)], { type: "application/json" }), "vtm-role-recorder-backup.json");
   statusMessage.textContent = "Backup exported.";
 });
 

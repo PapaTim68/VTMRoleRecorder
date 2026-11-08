@@ -9,7 +9,10 @@ import {
   calculateOutcome,
   calculatePool,
   createInitialState,
+  formatSuccessDiceRatio,
+  formatTextTable,
   hungerDiceCount,
+  summarizeRolls,
   validateState,
 } from "../core.js";
 
@@ -37,6 +40,49 @@ test("Hunger dice are limited by both Hunger and pool size", () => {
   assert.equal(hungerDiceCount(4, 7), 4);
   assert.equal(hungerDiceCount(4, 2), 2);
   assert.equal(hungerDiceCount(0, 7), 0);
+});
+
+test("success-to-dice ratios use successes divided by dice", () => {
+  assert.equal(formatSuccessDiceRatio(33, 54), "0.61");
+  assert.equal(formatSuccessDiceRatio(0, 0), "—");
+});
+
+test("plain-text tables align columns and normalize newlines", () => {
+  assert.equal(
+    formatTextTable(["NAME", "TOTAL"], [["Trace\nElspeth", 6]]),
+    "+---------------+-------+\n| NAME          | TOTAL |\n+---------------+-------+\n| Trace Elspeth | 6     |\n+---------------+-------+",
+  );
+});
+
+test("report summaries separate unresolved outcomes and special events", () => {
+  const state = createInitialState();
+  const participant = state.participants[0];
+  const rolls = [
+    { participantId: participant.id, type: "roll", pool: 6, hungerDice: 2, successes: 3, outcome: "Success" },
+    { participantId: participant.id, type: "roll", pool: 3, hungerDice: 1, successes: 1, outcome: "Success", outcomeRecorded: false },
+    { participantId: participant.id, type: "rouse", pool: 1, hungerDice: 0, successes: 1, outcome: "Rouse success", outcomeRecorded: false },
+    { participantId: participant.id, type: "damage", amount: 6, sourceDice: 4 },
+    { participantId: participant.id, type: "resource", resource: "health", from: 5, to: 3, sourceSuccess: -2 },
+  ];
+  const { participants, totals, outcomes } = summarizeRolls(state.participants, rolls);
+  assert.equal(participants[0].rolls, 2);
+  assert.equal(participants[0].outcomeRolls, 1);
+  assert.equal(participants[0].dice, 10);
+  assert.equal(participants[0].normalDice, 7);
+  assert.equal(participants[0].hungerDice, 3);
+  assert.equal(participants[0].successes, 5);
+  assert.equal(participants[0].successfulRolls, 1);
+  assert.equal(participants[0].rouses, 1);
+  assert.equal(participants[0].resolvedRouses, 0);
+  assert.equal(participants[0].rouseSuccesses, 0);
+  assert.equal(participants[0].damage, 6);
+  assert.equal(participants[0].healthChange, -2);
+  assert.equal(participants[0].sourceDice, 14);
+  assert.equal(participants[0].sourceSuccesses, 9);
+  assert.equal(totals.outcomeRolls, 1);
+  assert.equal(totals.sourceDice, 14);
+  assert.equal(totals.sourceSuccesses, 9);
+  assert.equal(outcomes.Success, 1);
 });
 
 test("Willpower rerolls are capped at three non-Hunger dice", () => {
@@ -134,4 +180,21 @@ test("backup validation rejects incorrect roster sizes and accepts app state", (
   assert.equal("note" in state.sessions[0].rolls[0], false);
   state.participants = state.participants.filter((participant) => participant.role !== "storyteller");
   assert.throws(() => validateState(state), /2–5 players and exactly one Storyteller/);
+});
+
+test("backup validation accepts damage events and rejects invalid amounts", () => {
+  const state = createInitialState();
+  const participant = state.participants[0];
+  state.sessions[0].rolls.push({
+    id: "damage",
+    participantId: participant.id,
+    participantName: participant.name,
+    time: "12:00",
+    timestamp: new Date().toISOString(),
+    type: "damage",
+    amount: 3,
+  });
+  assert.equal(validateState(state), state);
+  state.sessions[0].rolls[0].amount = -1;
+  assert.throws(() => validateState(state), /damage entry/);
 });

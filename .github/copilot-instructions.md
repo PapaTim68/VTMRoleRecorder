@@ -25,3 +25,5 @@
 - Rouse failure adds one Hunger (bounded by its maximum), while success leaves Hunger unchanged; both are recorded as Rouse events.
 - Player Hunger, Willpower, and Health are current/maximum pairs. Resource changes are session-history events; roster and current resource state carries between named sessions, while each session owns its own history.
 - Keep backup validation and resource/pool bounds in `core.js`, and update the focused Node tests when changing those rules.
+- The state shape is effectively `{ version, participants, sessions, activeSessionId }`; do not introduce server-side persistence or a second store. The app intentionally relies on a single browser `localStorage` key.
+- `package.json` only defines the Node test runner; do not assume a build, lint, or dependency-install pipeline exists unless a feature explicitly requires it.

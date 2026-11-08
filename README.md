@@ -4,13 +4,17 @@ A local browser app for recording observed Vampire: The Masquerade dice rolls du
 
 ## Run locally
 
-From the repository folder, start Python's static file server bound to the local machine:
+Double-click `start-server.bat` to start the local server, then open <http://127.0.0.1:8000>. Press Ctrl+C in the server window to stop it.
+
+Alternatively, run Python's static file server from the repository folder:
 
 ```powershell
 py -m http.server 8000 --bind 127.0.0.1
 ```
 
 Open <http://127.0.0.1:8000> in a browser. The app has no build or package-install step. Records are stored in that browser's local storage; use **Export backup** regularly to save a portable JSON backup. Importing a backup replaces the current local app data.
+
+To load the converted workbook history, first export any app data you want to keep, then use **Import backup** to select `vtm-role-recorder-import.json`. The conversion imports episode tabs as separate sessions and skips the workbook's aggregate tab to avoid duplicate rolls. Since the workbook does not contain roll timestamps or resource maxima, imported rolls display `Imported`, and resource maxima use the app defaults unless the imported current value exceeds them. Missing ordinary outcomes use the app's successes-versus-difficulty rule, and Hunger dice are capped at the recorded pool. The workbook has no character-sheet data for David/Bub and only records current Hunger for some characters, so missing values use the app's default sheet/resource values. Rouse results are kept as history but do not change Hunger retroactively because the workbook has no resource-change history.
 
 ## Use
 
